@@ -1,0 +1,473 @@
+<!DOCTYPE html>
+<html lang="hr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<meta name="theme-color" content="#0D0D12">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="ADHD Planner">
+<title>ADHD Planner</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
+<script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  body { background: #0D0D12; font-family: 'Outfit', system-ui, sans-serif; }
+  ::-webkit-scrollbar { display: none; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useEffect, useRef, useCallback } = React;
+
+// ── Storage ───────────────────────────────
+function lsGet(key, fb) {
+  try { const v = localStorage.getItem(key); return v ? JSON.parse(v) : fb; } catch { return fb; }
+}
+function lsSet(key, val) {
+  try { localStorage.setItem(key, JSON.stringify(val)); } catch {}
+}
+
+const KEYS = { tasks: "adhd-v3-tasks", settings: "adhd-v3-settings", stats: "adhd-v3-stats" };
+
+const TABS = [
+  { id: "danas",  label: "Danas",       emoji: "⚡" },
+  { id: "tjedan", label: "Ovaj tjedan", emoji: "📅" },
+  { id: "vazno",  label: "Važno",       emoji: "🔥" },
+  { id: "ostalo", label: "Ostalo",      emoji: "📦" },
+];
+
+const TAGS = ["posao", "dom", "škola", "zdravlje", "hobby", "ostalo"];
+
+const THEMES = {
+  dark:     { bg: "#0D0D12", card: "#16161E", border: "#1E1E2A", text: "#E8E8F0", sub: "#55556A", accent: "#FF6B35" },
+  midnight: { bg: "#080812", card: "#10102A", border: "#1A1A3A", text: "#E0E0FF", sub: "#44448A", accent: "#7B6EF6" },
+  forest:   { bg: "#0A120A", card: "#12201A", border: "#1A2E20", text: "#E0F0E8", sub: "#446654", accent: "#44BB77" },
+  rose:     { bg: "#120A0A", card: "#20121A", border: "#2E1A22", text: "#F0E0E8", sub: "#664454", accent: "#FF6B9D" },
+  ocean:    { bg: "#080E14", card: "#101820", border: "#182030", text: "#E0EEF8", sub: "#345678", accent: "#4ECDC4" },
+};
+
+const WALLPAPERS = {
+  none:   null,
+  stars:  "radial-gradient(ellipse at 20% 50%, #1a1a4e 0%, #0D0D12 50%), radial-gradient(ellipse at 80% 20%, #2a1a3e 0%, transparent 50%)",
+  aurora: "linear-gradient(135deg, #0D0D12 0%, #0a1628 30%, #0d1f1a 60%, #0D0D12 100%)",
+  ember:  "radial-gradient(ellipse at 50% 100%, #2a1000 0%, #0D0D12 60%)",
+  cosmos: "radial-gradient(ellipse at 30% 70%, #1a0a2e 0%, #0D0D12 50%), radial-gradient(ellipse at 70% 30%, #0a1a2e 0%, transparent 60%)",
+};
+
+function uid() { return Math.random().toString(36).slice(2) + Date.now().toString(36); }
+
+// ══════════════════════════════════════════
+function App() {
+  const [tasks,    setTasks]    = useState(() => lsGet(KEYS.tasks,    []));
+  const [settings, setSettings] = useState(() => lsGet(KEYS.settings, { theme: "dark", wallpaper: "none" }));
+  const [stats,    setStats]    = useState(() => lsGet(KEYS.stats,    { completed: 0, byDay: {} }));
+  const [activeTab,    setActiveTab]    = useState("danas");
+  const [view,         setView]         = useState("main");
+  const [showAdd,      setShowAdd]      = useState(false);
+  const [surpriseTask, setSurpriseTask] = useState(null);
+
+  useEffect(() => { lsSet(KEYS.tasks,    tasks);    }, [tasks]);
+  useEffect(() => { lsSet(KEYS.settings, settings); }, [settings]);
+  useEffect(() => { lsSet(KEYS.stats,    stats);    }, [stats]);
+
+  const theme     = THEMES[settings.theme] || THEMES.dark;
+  const wallpaper = WALLPAPERS[settings.wallpaper];
+
+  const addTask    = useCallback((t)       => setTasks(p => [t, ...p]), []);
+  const updateTask = useCallback((id, patch) => setTasks(p => p.map(t => t.id === id ? {...t,...patch} : t)), []);
+  const deleteTask = useCallback((id)      => setTasks(p => p.filter(t => t.id !== id)), []);
+
+  const toggleDone = useCallback((id) => {
+    setTasks(p => p.map(t => {
+      if (t.id !== id) return t;
+      const done = !t.done;
+      if (done) {
+        const today = new Date().toISOString().slice(0,10);
+        setStats(s => ({ completed: s.completed+1, byDay: {...s.byDay, [today]: (s.byDay[today]||0)+1} }));
+      }
+      return {...t, done};
+    }));
+  }, []);
+
+  const toggleFav = useCallback((id) =>
+    setTasks(p => p.map(t => t.id === id ? {...t, fav: !t.fav} : t)), []);
+
+  const reorder = useCallback((tab, from, to) => {
+    setTasks(p => {
+      const arr  = [...p.filter(t => t.tab === tab)];
+      const rest = p.filter(t => t.tab !== tab);
+      const [item] = arr.splice(from, 1);
+      arr.splice(to, 0, item);
+      return [...arr, ...rest];
+    });
+  }, []);
+
+  const tabTasks = tasks.filter(t => t.tab === activeTab);
+  const pending  = tabTasks.filter(t => !t.done).sort((a,b) => (b.fav?1:0)-(a.fav?1:0));
+  const done     = tabTasks.filter(t => t.done);
+  const curTab   = TABS.find(t => t.id === activeTab);
+
+  const handleSurprise = () => {
+    const pool = tasks.filter(t => !t.done);
+    if (pool.length) setSurpriseTask(pool[Math.floor(Math.random()*pool.length)]);
+  };
+
+  const bgStyle = wallpaper
+    ? { backgroundImage: wallpaper }
+    : { background: theme.bg };
+
+  return (
+    <div style={{ minHeight:"100vh", maxWidth:430, margin:"0 auto", ...bgStyle, fontFamily:"'Outfit',system-ui,sans-serif", color:theme.text, display:"flex", flexDirection:"column", position:"relative" }}>
+      {wallpaper && <div style={{ position:"fixed", inset:0, background:theme.bg+"CC", zIndex:0 }} />}
+      <div style={{ position:"relative", zIndex:1, display:"flex", flexDirection:"column", minHeight:"100vh" }}>
+
+        {view === "settings" && <SettingsView theme={theme} settings={settings} setSettings={setSettings} onBack={() => setView("main")} onReset={() => { setTasks([]); setStats({ completed:0, byDay:{} }); setView("main"); }} />}
+        {view === "stats"    && <StatsView theme={theme} stats={stats} tasks={tasks} onBack={() => setView("main")} />}
+
+        {view === "main" && <>
+          {/* Header */}
+          <div style={{ padding:"48px 24px 16px" }}>
+            <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start" }}>
+              <div>
+                <p style={{ margin:0, fontSize:11, letterSpacing:"0.2em", color:theme.sub, textTransform:"uppercase", marginBottom:6 }}>MOJI ZADACI</p>
+                <h1 style={{ margin:0, fontSize:36, fontWeight:800, color:theme.accent }}>{curTab.emoji} {curTab.label}</h1>
+                <p style={{ margin:"6px 0 0", fontSize:13, color:theme.sub }}>{pending.length} aktivnih · {done.length} završenih</p>
+              </div>
+              <div style={{ display:"flex", gap:8 }}>
+                <IBtn icon="📊" onClick={() => setView("stats")}    theme={theme} />
+                <IBtn icon="⚙️" onClick={() => setView("settings")} theme={theme} />
+              </div>
+            </div>
+          </div>
+
+          {/* Tabs */}
+          <div style={{ padding:"0 16px 16px", overflowX:"auto", display:"flex", gap:8, scrollbarWidth:"none" }}>
+            {TABS.map(tab => (
+              <button key={tab.id} onClick={() => setActiveTab(tab.id)} style={{
+                padding:"9px 16px", borderRadius:99,
+                border:`2px solid ${activeTab===tab.id ? theme.accent : theme.border}`,
+                background: activeTab===tab.id ? theme.accent+"22" : theme.card,
+                color: activeTab===tab.id ? theme.accent : theme.sub,
+                cursor:"pointer", fontFamily:"inherit", fontSize:13,
+                fontWeight: activeTab===tab.id ? 700 : 500, whiteSpace:"nowrap", transition:"all .2s",
+              }}>{tab.emoji} {tab.label}</button>
+            ))}
+          </div>
+
+          {/* Tasks */}
+          <div style={{ flex:1, padding:"0 16px", overflowY:"auto", paddingBottom:120 }}>
+            {pending.length === 0 && done.length === 0 ? (
+              <div style={{ textAlign:"center", padding:"80px 20px", color:theme.sub }}>
+                <div style={{ fontSize:48, marginBottom:16 }}>✦</div>
+                <div style={{ fontSize:18, fontWeight:600, marginBottom:8 }}>Nema zadataka ovdje</div>
+                <div style={{ fontSize:14, color:theme.sub+"88" }}>Dodaj prvi zadatak!</div>
+              </div>
+            ) : (
+              <>
+                {pending.map((task,i) => (
+                  <TaskCard key={task.id} task={task} theme={theme} index={i} total={pending.length}
+                    onToggle={() => toggleDone(task.id)}
+                    onFav={() => toggleFav(task.id)}
+                    onDelete={() => deleteTask(task.id)}
+                    onUpdate={(patch) => updateTask(task.id, patch)}
+                    onMoveUp={i>0 ? () => reorder(activeTab,i,i-1) : null}
+                    onMoveDown={i<pending.length-1 ? () => reorder(activeTab,i,i+1) : null}
+                  />
+                ))}
+                {done.length > 0 && <>
+                  <div style={{ display:"flex", alignItems:"center", gap:10, margin:"20px 0 12px", color:theme.sub, fontSize:12 }}>
+                    <div style={{ flex:1, height:1, background:theme.border }} />
+                    ✓ završeno ({done.length})
+                    <div style={{ flex:1, height:1, background:theme.border }} />
+                  </div>
+                  {done.map(task => (
+                    <TaskCard key={task.id} task={task} theme={theme} faded
+                      onToggle={() => toggleDone(task.id)} onFav={() => toggleFav(task.id)}
+                      onDelete={() => deleteTask(task.id)} onUpdate={(patch) => updateTask(task.id, patch)}
+                    />
+                  ))}
+                </>}
+              </>
+            )}
+          </div>
+
+          {/* Surprise */}
+          {tasks.filter(t=>!t.done).length > 0 && (
+            <button onClick={handleSurprise} style={{
+              position:"fixed", bottom:96, right:24,
+              background:theme.card, border:`1px solid ${theme.border}`,
+              borderRadius:99, padding:"10px 16px", color:theme.text,
+              cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:600,
+              boxShadow:"0 4px 20px #00000066", zIndex:10,
+            }}>🎲 Iznenadi me</button>
+          )}
+
+          {/* Add btn */}
+          <div style={{ position:"fixed", bottom:32, left:"50%", transform:"translateX(-50%)", zIndex:10, width:"calc(100% - 48px)", maxWidth:382 }}>
+            <button onClick={() => setShowAdd(true)} style={{
+              width:"100%", padding:"18px", borderRadius:99,
+              background:`linear-gradient(135deg, ${theme.accent}, ${theme.accent}CC)`,
+              border:"none", color:"#fff", cursor:"pointer",
+              fontFamily:"inherit", fontSize:17, fontWeight:700,
+              boxShadow:`0 8px 32px ${theme.accent}66`,
+            }}>+ Dodaj zadatak</button>
+          </div>
+        </>}
+      </div>
+
+      {showAdd && <AddModal theme={theme} activeTab={activeTab} onClose={() => setShowAdd(false)} onAdd={(t) => { addTask(t); setShowAdd(false); }} />}
+      {surpriseTask && <SurpriseModal task={surpriseTask} theme={theme} onClose={() => setSurpriseTask(null)} />}
+    </div>
+  );
+}
+
+function IBtn({ icon, onClick, theme }) {
+  return (
+    <button onClick={onClick} style={{ background:theme.card, border:`1px solid ${theme.border}`, borderRadius:12, width:40, height:40, cursor:"pointer", fontSize:18, display:"flex", alignItems:"center", justifyContent:"center" }}>{icon}</button>
+  );
+}
+
+function TaskCard({ task, theme, faded, onToggle, onFav, onDelete, onUpdate, onMoveUp, onMoveDown }) {
+  const [expanded,     setExpanded]     = useState(false);
+  const [editingTitle, setEditingTitle] = useState(false);
+  const [editingNote,  setEditingNote]  = useState(false);
+  const [titleVal,     setTitleVal]     = useState(task.text);
+  const [noteVal,      setNoteVal]      = useState(task.note || "");
+
+  function saveTitle() { if (titleVal.trim()) onUpdate({ text: titleVal.trim() }); setEditingTitle(false); }
+  function saveNote()  { onUpdate({ note: noteVal.trim() }); setEditingNote(false); }
+
+  return (
+    <div style={{ background:theme.card, border:`1px solid ${task.fav ? theme.accent+"55" : theme.border}`, borderRadius:16, marginBottom:10, overflow:"hidden", opacity:faded?0.5:1, boxShadow:task.fav?`0 0 20px ${theme.accent}22`:"none" }}>
+      <div style={{ display:"flex", alignItems:"center", gap:12, padding:"14px 14px 14px 16px" }}>
+        <button onClick={onToggle} style={{ width:24, height:24, borderRadius:8, flexShrink:0, border:`2px solid ${task.done?"#44BB77":theme.accent+"88"}`, background:task.done?"#44BB7733":"none", cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center", fontSize:13, color:"#44BB77" }}>{task.done && "✓"}</button>
+        <div style={{ flex:1, minWidth:0 }}>
+          {editingTitle ? (
+            <input value={titleVal} onChange={e => setTitleVal(e.target.value)} onBlur={saveTitle} onKeyDown={e => e.key==="Enter" && saveTitle()} autoFocus
+              style={{ background:"none", border:"none", outline:"none", color:theme.text, fontFamily:"inherit", fontSize:15, fontWeight:600, width:"100%" }} />
+          ) : (
+            <p onDoubleClick={() => !faded && setEditingTitle(true)} style={{ margin:0, fontSize:15, fontWeight:600, color:task.done?theme.sub:theme.text, textDecoration:task.done?"line-through":"none", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{task.text}</p>
+          )}
+          {task.tag && <span style={{ fontSize:10, background:theme.accent+"22", color:theme.accent, borderRadius:99, padding:"2px 8px", display:"inline-block", marginTop:4 }}>#{task.tag}</span>}
+        </div>
+        <div style={{ display:"flex", gap:4, flexShrink:0 }}>
+          {!faded && onMoveUp   && <MB label="↑" onClick={onMoveUp}   theme={theme} />}
+          {!faded && onMoveDown && <MB label="↓" onClick={onMoveDown} theme={theme} />}
+          <MB label={task.fav?"⭐":"☆"} onClick={onFav} theme={theme} accent={task.fav?theme.accent:null} />
+          <MB label={expanded?"▲":"▼"} onClick={() => setExpanded(e=>!e)} theme={theme} />
+          <MB label="×" onClick={onDelete} theme={theme} danger />
+        </div>
+      </div>
+
+      {expanded && !faded && (
+        <div style={{ padding:"0 16px 14px", borderTop:`1px solid ${theme.border}` }}>
+          <div style={{ marginTop:12 }}>
+            <p style={{ margin:"0 0 6px", fontSize:11, color:theme.sub, textTransform:"uppercase", letterSpacing:"0.1em" }}>📝 Bilješka</p>
+            {editingNote ? (
+              <textarea value={noteVal} onChange={e => setNoteVal(e.target.value)} onBlur={saveNote} autoFocus rows={3}
+                style={{ width:"100%", background:theme.bg, border:`1px solid ${theme.border}`, borderRadius:8, padding:"8px 10px", color:theme.text, fontFamily:"inherit", fontSize:13, resize:"none", outline:"none", boxSizing:"border-box" }} />
+            ) : (
+              <p onClick={() => setEditingNote(true)} style={{ margin:0, fontSize:13, color:task.note?theme.text:theme.sub+"66", cursor:"pointer", padding:"8px 10px", background:theme.bg, borderRadius:8, border:`1px solid ${theme.border}`, minHeight:36 }}>{task.note || "Dodaj bilješku..."}</p>
+            )}
+          </div>
+          <div style={{ marginTop:12 }}>
+            <p style={{ margin:"0 0 6px", fontSize:11, color:theme.sub, textTransform:"uppercase", letterSpacing:"0.1em" }}>🏷️ Tag</p>
+            <div style={{ display:"flex", gap:6, flexWrap:"wrap" }}>
+              {TAGS.map(tag => (
+                <button key={tag} onClick={() => onUpdate({ tag: task.tag===tag ? null : tag })} style={{ padding:"4px 12px", borderRadius:99, fontSize:12, border:`1px solid ${task.tag===tag?theme.accent:theme.border}`, background:task.tag===tag?theme.accent+"22":"none", color:task.tag===tag?theme.accent:theme.sub, cursor:"pointer", fontFamily:"inherit" }}>#{tag}</button>
+              ))}
+            </div>
+          </div>
+          {!editingTitle && (
+            <button onClick={() => setEditingTitle(true)} style={{ marginTop:12, padding:"6px 14px", borderRadius:8, background:"none", border:`1px solid ${theme.border}`, color:theme.sub, cursor:"pointer", fontFamily:"inherit", fontSize:12 }}>✏️ Uredi naziv</button>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function MB({ label, onClick, theme, danger, accent }) {
+  return (
+    <button onClick={onClick} style={{ background:"none", border:`1px solid ${theme.border}`, borderRadius:8, width:28, height:28, cursor:"pointer", color:danger?"#FF4444":accent||theme.sub, fontSize:13, display:"flex", alignItems:"center", justifyContent:"center", fontFamily:"inherit", padding:0 }}>{label}</button>
+  );
+}
+
+function AddModal({ theme, activeTab, onClose, onAdd }) {
+  const [text, setText] = useState("");
+  const [note, setNote] = useState("");
+  const [tag,  setTag]  = useState(null);
+  const [tab,  setTab]  = useState(activeTab);
+  const ref = useRef();
+  useEffect(() => { setTimeout(() => ref.current?.focus(), 100); }, []);
+
+  function submit() {
+    if (!text.trim()) return;
+    onAdd({ id:uid(), text:text.trim(), note, tag, tab, done:false, fav:false, createdAt:Date.now() });
+  }
+
+  return (
+    <div style={{ position:"fixed", inset:0, background:"#00000099", zIndex:100, display:"flex", alignItems:"flex-end", justifyContent:"center" }} onClick={e => e.target===e.currentTarget && onClose()}>
+      <div style={{ width:"100%", maxWidth:430, background:theme.card, borderRadius:"24px 24px 0 0", padding:"24px 20px 40px", border:`1px solid ${theme.border}` }}>
+        <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:20 }}>
+          <h2 style={{ margin:0, fontSize:18, fontWeight:700 }}>Novi zadatak</h2>
+          <button onClick={onClose} style={{ background:"none", border:"none", color:theme.sub, cursor:"pointer", fontSize:22 }}>×</button>
+        </div>
+        <input ref={ref} value={text} onChange={e => setText(e.target.value)} onKeyDown={e => e.key==="Enter" && submit()} placeholder="Što trebaš napraviti?"
+          style={{ width:"100%", background:theme.bg, border:`1px solid ${theme.border}`, borderRadius:12, padding:"14px 16px", color:theme.text, fontFamily:"inherit", fontSize:16, outline:"none", boxSizing:"border-box", marginBottom:12 }} />
+        <textarea value={note} onChange={e => setNote(e.target.value)} placeholder="Bilješka (opciono)..." rows={2}
+          style={{ width:"100%", background:theme.bg, border:`1px solid ${theme.border}`, borderRadius:12, padding:"12px 16px", color:theme.text, fontFamily:"inherit", fontSize:14, outline:"none", resize:"none", boxSizing:"border-box", marginBottom:14 }} />
+        <p style={{ margin:"0 0 8px", fontSize:11, color:theme.sub, textTransform:"uppercase", letterSpacing:"0.1em" }}>Kategorija</p>
+        <div style={{ display:"flex", gap:6, marginBottom:14, flexWrap:"wrap" }}>
+          {TABS.map(t => (
+            <button key={t.id} onClick={() => setTab(t.id)} style={{ padding:"6px 14px", borderRadius:99, fontSize:12, border:`1px solid ${tab===t.id?theme.accent:theme.border}`, background:tab===t.id?theme.accent+"22":"none", color:tab===t.id?theme.accent:theme.sub, cursor:"pointer", fontFamily:"inherit" }}>{t.emoji} {t.label}</button>
+          ))}
+        </div>
+        <p style={{ margin:"0 0 8px", fontSize:11, color:theme.sub, textTransform:"uppercase", letterSpacing:"0.1em" }}>Tag</p>
+        <div style={{ display:"flex", gap:6, flexWrap:"wrap", marginBottom:20 }}>
+          {TAGS.map(t => (
+            <button key={t} onClick={() => setTag(tag===t?null:t)} style={{ padding:"5px 12px", borderRadius:99, fontSize:12, border:`1px solid ${tag===t?theme.accent:theme.border}`, background:tag===t?theme.accent+"22":"none", color:tag===t?theme.accent:theme.sub, cursor:"pointer", fontFamily:"inherit" }}>#{t}</button>
+          ))}
+        </div>
+        <button onClick={submit} disabled={!text.trim()} style={{ width:"100%", padding:"16px", borderRadius:99, background:text.trim()?`linear-gradient(135deg, ${theme.accent}, ${theme.accent}CC)`:theme.border, border:"none", color:text.trim()?"#fff":theme.sub, cursor:text.trim()?"pointer":"default", fontFamily:"inherit", fontSize:16, fontWeight:700 }}>+ Dodaj zadatak</button>
+      </div>
+    </div>
+  );
+}
+
+function SettingsView({ theme, settings, setSettings, onBack, onReset }) {
+  const [confirmReset, setConfirmReset] = useState(false);
+  return (
+    <div style={{ padding:"48px 20px 40px" }}>
+      <div style={{ display:"flex", alignItems:"center", gap:14, marginBottom:28 }}>
+        <button onClick={onBack} style={{ background:"none", border:`1px solid ${theme.border}`, borderRadius:10, padding:"8px 14px", color:theme.text, cursor:"pointer", fontFamily:"inherit", fontSize:14 }}>← Nazad</button>
+        <h2 style={{ margin:0, fontSize:22, fontWeight:800 }}>⚙️ Postavke</h2>
+      </div>
+      <Sec title="🎨 Tema" theme={theme}>
+        <div style={{ display:"flex", gap:10, flexWrap:"wrap" }}>
+          {Object.entries(THEMES).map(([key,val]) => (
+            <button key={key} onClick={() => setSettings(s=>({...s,theme:key}))} style={{ width:48, height:48, borderRadius:12, background:val.bg, border:`3px solid ${settings.theme===key?val.accent:val.border}`, cursor:"pointer", position:"relative" }}>
+              <div style={{ position:"absolute", bottom:4, right:4, width:12, height:12, borderRadius:99, background:val.accent }} />
+            </button>
+          ))}
+        </div>
+        <div style={{ display:"flex", gap:8, marginTop:8, flexWrap:"wrap" }}>
+          {Object.keys(THEMES).map(key => <span key={key} style={{ fontSize:11, color:settings.theme===key?theme.accent:theme.sub, textTransform:"capitalize" }}>{key}</span>)}
+        </div>
+      </Sec>
+      <Sec title="🌌 Pozadina" theme={theme}>
+        <div style={{ display:"flex", gap:10, flexWrap:"wrap" }}>
+          {Object.entries(WALLPAPERS).map(([key,val]) => (
+            <button key={key} onClick={() => setSettings(s=>({...s,wallpaper:key}))} style={{ width:64, height:48, borderRadius:12, background:val||theme.bg, backgroundImage:val||undefined, border:`3px solid ${settings.wallpaper===key?theme.accent:theme.border}`, cursor:"pointer" }}>
+              <span style={{ fontSize:9, color:"#fff", textShadow:"0 1px 4px #000", textTransform:"capitalize" }}>{key}</span>
+            </button>
+          ))}
+        </div>
+      </Sec>
+      <Sec title="🔄 Reset" theme={theme}>
+        <p style={{ margin:"0 0 12px", fontSize:13, color:theme.sub }}>Briše sve taskove i statistike. Ne može se poništiti.</p>
+        {!confirmReset ? (
+          <button onClick={() => setConfirmReset(true)} style={{ padding:"12px 20px", borderRadius:12, background:"none", border:"1px solid #FF4444", color:"#FF4444", cursor:"pointer", fontFamily:"inherit", fontSize:14, fontWeight:600 }}>Resetiraj sve</button>
+        ) : (
+          <div style={{ display:"flex", gap:10 }}>
+            <button onClick={onReset} style={{ padding:"12px 20px", borderRadius:12, background:"#FF444422", border:"1px solid #FF4444", color:"#FF4444", cursor:"pointer", fontFamily:"inherit", fontSize:14, fontWeight:700 }}>✓ Potvrdi</button>
+            <button onClick={() => setConfirmReset(false)} style={{ padding:"12px 20px", borderRadius:12, background:"none", border:`1px solid ${theme.border}`, color:theme.sub, cursor:"pointer", fontFamily:"inherit", fontSize:14 }}>Odustani</button>
+          </div>
+        )}
+      </Sec>
+    </div>
+  );
+}
+
+function StatsView({ theme, stats, tasks, onBack }) {
+  const total    = tasks.length;
+  const done     = tasks.filter(t=>t.done).length;
+  const pct      = total ? Math.round((done/total)*100) : 0;
+  const favCount = tasks.filter(t=>t.fav).length;
+  const tagCounts = TAGS.map(tag => ({ tag, count: tasks.filter(t=>t.tag===tag).length })).filter(t=>t.count>0);
+  const last7 = Array.from({length:7},(_,i)=>{
+    const d = new Date(); d.setDate(d.getDate()-(6-i));
+    const key = d.toISOString().slice(0,10);
+    return { label: d.toLocaleDateString("hr",{weekday:"short"}), count: stats.byDay[key]||0 };
+  });
+  const maxBar = Math.max(...last7.map(d=>d.count),1);
+
+  return (
+    <div style={{ padding:"48px 20px 40px" }}>
+      <div style={{ display:"flex", alignItems:"center", gap:14, marginBottom:28 }}>
+        <button onClick={onBack} style={{ background:"none", border:`1px solid ${theme.border}`, borderRadius:10, padding:"8px 14px", color:theme.text, cursor:"pointer", fontFamily:"inherit", fontSize:14 }}>← Nazad</button>
+        <h2 style={{ margin:0, fontSize:22, fontWeight:800 }}>📊 Statistike</h2>
+      </div>
+      <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:12, marginBottom:16 }}>
+        {[{label:"Ukupno završeno",value:stats.completed,emoji:"✅",accent:theme.accent},{label:"Aktivnih",value:total-done,emoji:"⚡",accent:"#FFB800"},{label:"Favoriti",value:favCount,emoji:"⭐",accent:"#FFD700"},{label:"Završeno %",value:pct+"%",emoji:"🎯",accent:"#44BB77"}].map(sc=>(
+          <div key={sc.label} style={{ background:theme.card, border:`1px solid ${theme.border}`, borderRadius:16, padding:16 }}>
+            <div style={{ fontSize:24, marginBottom:6 }}>{sc.emoji}</div>
+            <div style={{ fontSize:26, fontWeight:800, color:sc.accent }}>{sc.value}</div>
+            <div style={{ fontSize:11, color:theme.sub, marginTop:2 }}>{sc.label}</div>
+          </div>
+        ))}
+      </div>
+      <Sec title="📅 Zadnjih 7 dana" theme={theme}>
+        <div style={{ display:"flex", gap:8, alignItems:"flex-end", height:80 }}>
+          {last7.map(d=>(
+            <div key={d.label} style={{ flex:1, display:"flex", flexDirection:"column", alignItems:"center", gap:4 }}>
+              <div style={{ width:"100%", height:Math.max(4,(d.count/maxBar)*64), background:d.count>0?theme.accent:theme.border, borderRadius:4 }} />
+              <span style={{ fontSize:10, color:theme.sub }}>{d.label}</span>
+              {d.count>0 && <span style={{ fontSize:10, color:theme.accent, fontWeight:700 }}>{d.count}</span>}
+            </div>
+          ))}
+        </div>
+      </Sec>
+      {tagCounts.length > 0 && (
+        <Sec title="🏷️ Po tagovima" theme={theme}>
+          {tagCounts.map(({tag,count})=>(
+            <div key={tag} style={{ display:"flex", alignItems:"center", gap:10, marginBottom:8 }}>
+              <span style={{ fontSize:13, color:theme.text, flex:1 }}>#{tag}</span>
+              <div style={{ flex:3, height:8, background:theme.border, borderRadius:99, overflow:"hidden" }}>
+                <div style={{ width:`${(count/total)*100}%`, height:"100%", background:theme.accent, borderRadius:99 }} />
+              </div>
+              <span style={{ fontSize:12, color:theme.sub, width:20, textAlign:"right" }}>{count}</span>
+            </div>
+          ))}
+        </Sec>
+      )}
+    </div>
+  );
+}
+
+function Sec({ title, theme, children }) {
+  return (
+    <div style={{ background:theme.card, border:`1px solid ${theme.border}`, borderRadius:16, padding:16, marginBottom:14 }}>
+      <p style={{ margin:"0 0 14px", fontSize:13, fontWeight:700, color:theme.sub, textTransform:"uppercase", letterSpacing:"0.08em" }}>{title}</p>
+      {children}
+    </div>
+  );
+}
+
+function SurpriseModal({ task, theme, onClose }) {
+  return (
+    <div style={{ position:"fixed", inset:0, background:"#00000099", zIndex:200, display:"flex", alignItems:"center", justifyContent:"center", padding:24 }} onClick={e => e.target===e.currentTarget && onClose()}>
+      <div style={{ background:theme.card, border:`1px solid ${theme.accent}44`, borderRadius:24, padding:28, maxWidth:360, width:"100%", textAlign:"center" }}>
+        <div style={{ fontSize:48, marginBottom:12 }}>🎲</div>
+        <p style={{ margin:"0 0 8px", fontSize:12, color:theme.sub, textTransform:"uppercase", letterSpacing:"0.1em" }}>Tvoj sljedeći zadatak:</p>
+        <h2 style={{ margin:"0 0 8px", fontSize:20, fontWeight:800, color:theme.accent }}>{task.text}</h2>
+        {task.note && <p style={{ margin:"0 0 20px", fontSize:13, color:theme.sub }}>{task.note}</p>}
+        {task.tag  && <span style={{ fontSize:12, background:theme.accent+"22", color:theme.accent, borderRadius:99, padding:"3px 12px" }}>#{task.tag}</span>}
+        <div style={{ marginTop:24 }}>
+          <button onClick={onClose} style={{ padding:"12px 32px", borderRadius:99, background:`linear-gradient(135deg, ${theme.accent}, ${theme.accent}CC)`, border:"none", color:"#fff", cursor:"pointer", fontFamily:"inherit", fontSize:15, fontWeight:700 }}>Ajmo! 💪</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+const root = ReactDOM.createRoot(document.getElementById('root'));
+root.render(<App />);
+</script>
+</body>
+</html>
